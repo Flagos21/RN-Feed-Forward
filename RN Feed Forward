@@ -1,0 +1,111 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, Flatten
+from tensorflow.keras.optimizers import Adam, SGD, RMSprop
+import matplotlib.pyplot as plt
+
+# 1. Cargar el CSV
+data = pd.read_csv('Datos históricos de NVIDIA (NVDA).csv')
+
+# 2. Preprocesamiento de datos
+data['Fecha'] = pd.to_datetime(data['Fecha'], format='%d.%m.%Y')
+data = data.sort_values('Fecha')
+
+# Seleccionamos solo la columna 'Último' para predecir precios futuros
+prices = data['Último'].str.replace(',', '').astype(float).values.reshape(-1, 1)
+
+# Escalamos los datos entre 0 y 1
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_prices = scaler.fit_transform(prices)
+
+# 3. Crear secuencias para la red neuronal
+def create_sequences(data, sequence_length):
+    sequences = []
+    labels = []
+    for i in range(len(data) - sequence_length):
+        sequences.append(data[i:i + sequence_length])
+        labels.append(data[i + sequence_length])
+    return np.array(sequences), np.array(labels)
+
+sequence_length = 50  # Usaremos los últimos 50 días para predecir
+X, y = create_sequences(scaled_prices, sequence_length)
+
+# Dividir en datos de entrenamiento y prueba (80% entrenamiento, 20% prueba)
+train_size = int(0.8 * len(X))
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+# Función para construir el modelo
+def build_model(layers, neurons, activation, learning_rate, optimizer):
+    model = Sequential()
+    
+    # Aplanar las secuencias
+    model.add(Flatten(input_shape=(sequence_length, 1)))
+    
+    # Agregar capas ocultas con las configuraciones proporcionadas
+    for _ in range(layers):
+        model.add(Dense(neurons, activation=activation))
+        model.add(Dropout(0.2))  # Regularización
+    
+    # Capa de salida
+    model.add(Dense(1))
+    
+    # Elegir el optimizador
+    if optimizer == 'adam':
+        opt = Adam(learning_rate=learning_rate)
+    elif optimizer == 'sgd':
+        opt = SGD(learning_rate=learning_rate)
+    elif optimizer == 'rmsprop':
+        opt = RMSprop(learning_rate=learning_rate)
+    
+    # Compilar el modelo
+    model.compile(optimizer=opt, loss='mean_squared_error')
+    
+    return model
+
+# Configuraciones a experimentar
+configurations = [
+    {'layers': 2, 'neurons': 128, 'activation': 'relu', 'learning_rate': 0.001, 'optimizer': 'adam'},
+    {'layers': 3, 'neurons': 64, 'activation': 'sigmoid', 'learning_rate': 0.001, 'optimizer': 'adam'},
+    {'layers': 2, 'neurons': 128, 'activation': 'tanh', 'learning_rate': 0.01, 'optimizer': 'sgd'},
+    {'layers': 4, 'neurons': 256, 'activation': 'relu', 'learning_rate': 0.0005, 'optimizer': 'rmsprop'}
+]
+
+# 4. Entrenar y probar cada configuración
+for config in configurations:
+    print(f"Probando configuración: {config}")
+    
+    # Construir el modelo
+    model = build_model(config['layers'], config['neurons'], config['activation'], config['learning_rate'], config['optimizer'])
+    
+    # Entrenar el modelo
+    history = model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_test, y_test))
+    
+    # Hacer predicciones
+    predictions = model.predict(X_test)
+    predictions = scaler.inverse_transform(predictions)
+    y_test_original = scaler.inverse_transform(y_test.reshape(-1, 1))
+    
+    # 5. Graficar los resultados
+    plt.figure(figsize=(10, 6))
+    plt.plot(y_test_original, label='Valores Reales')
+    plt.plot(predictions, label='Predicciones')
+    plt.legend()
+    plt.title(f"Predicciones con configuración: {config}")
+    plt.show()
+    
+    # 6. Graficar la pérdida durante el entrenamiento (MSE)
+    plt.figure(figsize=(10, 6))
+    plt.plot(history.history['loss'], label='Pérdida de Entrenamiento (MSE)')
+    plt.plot(history.history['val_loss'], label='Pérdida de Validación (MSE)')
+    plt.title(f'Pérdida durante el Entrenamiento con configuración: {config}')
+    plt.xlabel('Épocas')
+    plt.ylabel('Error Cuadrático Medio (MSE)')
+    plt.legend()
+    plt.show()
+    
+    # 7. Evaluar el modelo
+    test_loss = model.evaluate(X_test, y_test)
+    print(f"Test loss (MSE) con configuración {config}: {test_loss}\n")
